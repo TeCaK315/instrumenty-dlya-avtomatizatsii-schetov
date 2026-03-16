@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { FileText, Eye, Download, Send, Clock, CheckCircle, XCircle } from 'lucide-react';
-import { Spinner } from '@/components/LoadingStates';
+import { useUser } from '@/hooks/useUser';
+import { Eye, Download, Edit, Trash2, Send } from 'lucide-react';
 import { generatePDF } from '@/lib/pdf-generator';
 
 interface Invoice {
@@ -13,257 +13,351 @@ interface Invoice {
   client_email: string;
   total: number;
   status: 'draft' | 'sent' | 'paid' | 'overdue';
-  due_date: string;
   created_at: string;
+  due_date: string;
+  items: Array<{
+    description: string;
+    quantity: number;
+    rate: number;
+    amount: number;
+  }>;
+  subtotal: number;
+  tax: number;
+  notes?: string;
+  client_address?: string;
+  client_phone?: string;
 }
 
-interface InvoiceListProps {
-  refreshTrigger?: string;
-}
+const statusColors = {
+  draft: 'bg-gray-600 text-gray-200',
+  sent: 'bg-blue-600 text-blue-100',
+  paid: 'bg-green-600 text-green-100',
+  overdue: 'bg-red-600 text-red-100'
+};
 
-export default function InvoiceList({ refreshTrigger }: InvoiceListProps) {
+const statusLabels = {
+  draft: 'Черновик',
+  sent: 'Отправлен',
+  paid: 'Оплачен',
+  overdue: 'Просрочен'
+};
+
+export default function InvoiceList() {
+  const { user } = useUser();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
 
-  const fetchInvoices = async () => {
+  useEffect(() => {
+    if (user) {
+      loadInvoices();
+    }
+  }, [user]);
+
+  const loadInvoices = async () => {
+    if (!user) return;
+
     try {
       const supabase = createClient();
       const { data, error } = await supabase
         .from('invoices')
         .select('*')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       setInvoices(data || []);
     } catch (error) {
-      console.error('Error fetching invoices:', error);
+      console.error('Ошибка загрузки счетов:', error);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchInvoices();
-  }, [refreshTrigger]);
+  const deleteInvoice = async (id: string) => {
+    if (!confirm('Вы уверены, что хотите удалить этот счет?')) return;
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'draft':
-        return <Clock className="w-4 h-4 text-gray-400" />;
-      case 'sent':
-        return <Send className="w-4 h-4 text-blue-400" />;
-      case 'paid':
-        return <CheckCircle className="w-4 h-4 text-green-400" />;
-      case 'overdue':
-        return <XCircle className="w-4 h-4 text-red-400" />;
-      default:
-        return <Clock className="w-4 h-4 text-gray-400" />;
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'draft':
-        return 'Черновик';
-      case 'sent':
-        return 'Отправлен';
-      case 'paid':
-        return 'Оплачен';
-      case 'overdue':
-        return 'Просрочен';
-      default:
-        return status;
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'draft':
-        return 'bg-gray-700 text-gray-300';
-      case 'sent':
-        return 'bg-blue-900 text-blue-300';
-      case 'paid':
-        return 'bg-green-900 text-green-300';
-      case 'overdue':
-        return 'bg-red-900 text-red-300';
-      default:
-        return 'bg-gray-700 text-gray-300';
-    }
-  };
-
-  const handleDownloadPDF = async (invoice: Invoice) => {
-    setActionLoading(invoice.id);
     try {
       const supabase = createClient();
-      
-      // Fetch full invoice data with items
-      const { data: fullInvoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .select('*')
-        .eq('id', invoice.id)
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      const { data: items, error: itemsError } = await supabase
-        .from('invoice_items')
-        .select('*')
-        .eq('invoice_id', invoice.id);
-
-      if (itemsError) throw itemsError;
-
-      // Generate PDF
-      const pdfData = {
-        title: `Счет ${fullInvoice.invoice_number}`,
-        content: [
-          { label: 'Номер счета', value: fullInvoice.invoice_number },
-          { label: 'Клиент', value: fullInvoice.client_name },
-          { label: 'Email', value: fullInvoice.client_email },
-          { label: 'Срок оплаты', value: new Date(fullInvoice.due_date).toLocaleDateString('ru-RU') },
-          { label: 'Статус', value: getStatusText(fullInvoice.status) },
-          { label: 'Итого', value: `${fullInvoice.total.toFixed(2)} ₽` }
-        ],
-        items: items.map(item => ({
-          description: item.description,
-          quantity: item.quantity.toString(),
-          rate: `${item.rate.toFixed(2)} ₽`,
-          amount: `${item.amount.toFixed(2)} ₽`
-        }))
-      };
-
-      const pdfBlob = await generatePDF(pdfData);
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${fullInvoice.invoice_number}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Error downloading PDF:', error);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleSendInvoice = async (invoice: Invoice) => {
-    setActionLoading(invoice.id);
-    try {
-      const supabase = createClient();
-      
-      // Update status to sent
       const { error } = await supabase
         .from('invoices')
-        .update({ status: 'sent' })
-        .eq('id', invoice.id);
+        .delete()
+        .eq('id', id);
 
       if (error) throw error;
-
-      // Refresh the list
-      await fetchInvoices();
+      
+      setInvoices(prev => prev.filter(invoice => invoice.id !== id));
+      alert('Счет успешно удален');
     } catch (error) {
-      console.error('Error sending invoice:', error);
-    } finally {
-      setActionLoading(null);
+      console.error('Ошибка удаления:', error);
+      alert('Ошибка при удалении счета');
     }
   };
 
-  if (isLoading) {
+  const downloadInvoicePDF = (invoice: Invoice) => {
+    const tableRows = invoice.items.map(item => [
+      item.description,
+      item.quantity.toString(),
+      `₽${item.rate.toFixed(2)}`,
+      `₽${item.amount.toFixed(2)}`
+    ]);
+
+    generatePDF({
+      title: `Счет ${invoice.invoice_number}`,
+      subtitle: `Дата: ${new Date(invoice.created_at).toLocaleDateString('ru-RU')} | Срок оплаты: ${new Date(invoice.due_date).toLocaleDateString('ru-RU')}`,
+      sections: [
+        {
+          heading: 'Клиент',
+          content: `${invoice.client_name}\n${invoice.client_email}${invoice.client_address ? '\n' + invoice.client_address : ''}${invoice.client_phone ? '\n' + invoice.client_phone : ''}`
+        },
+        {
+          heading: 'Услуги/Товары',
+          table: {
+            headers: ['Описание', 'Кол-во', 'Цена', 'Сумма'],
+            rows: tableRows,
+            alignRight: [2, 3]
+          }
+        },
+        {
+          content: `Подытог: ₽${invoice.subtotal.toFixed(2)}\nНалог: ₽${invoice.tax.toFixed(2)}\nИтого: ₽${invoice.total.toFixed(2)}${invoice.notes ? '\n\nПримечания: ' + invoice.notes : ''}`
+        }
+      ],
+      brandColor: '#5a67d8'
+    }, `invoice-${invoice.invoice_number}.pdf`);
+  };
+
+  const updateInvoiceStatus = async (id: string, status: Invoice['status']) => {
+    try {
+      const supabase = createClient();
+      const { error } = await supabase
+        .from('invoices')
+        .update({ status })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      setInvoices(prev => prev.map(invoice => 
+        invoice.id === id ? { ...invoice, status } : invoice
+      ));
+    } catch (error) {
+      console.error('Ошибка обновления статуса:', error);
+      alert('Ошибка при обновлении статуса');
+    }
+  };
+
+  if (loading) {
     return (
-      <div className="bg-gray-800 rounded-lg p-6">
-        <div className="flex items-center justify-center py-8">
-          <Spinner />
-        </div>
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6">
-      <div className="flex items-center gap-3 mb-6">
-        <FileText className="w-6 h-6 text-orange-400" />
-        <h2 className="text-xl font-semibold text-gray-100">Список счетов</h2>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-white">Мои счета</h2>
+        <div className="text-sm text-gray-400">
+          Всего счетов: {invoices.length}
+        </div>
       </div>
 
       {invoices.length === 0 ? (
-        <div className="text-center py-8">
-          <FileText className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">Счета не найдены</p>
-          <p className="text-sm text-gray-500 mt-2">Создайте первый счет для начала работы</p>
+        <div className="text-center py-12">
+          <div className="text-gray-400 mb-4">
+            <Send className="w-16 h-16 mx-auto mb-4 opacity-50" />
+            <p className="text-lg">У вас пока нет счетов</p>
+            <p className="text-sm">Создайте свой первый счет, чтобы начать работу</p>
+          </div>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-700">
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Номер</th>
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Клиент</th>
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Сумма</th>
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Статус</th>
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Срок оплаты</th>
-                <th className="text-left py-3 px-4 text-gray-300 font-medium">Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoices.map((invoice) => (
-                <tr key={invoice.id} className="border-b border-gray-700 hover:bg-gray-750">
-                  <td className="py-3 px-4">
-                    <span className="text-gray-100 font-medium">{invoice.invoice_number}</span>
-                  </td>
-                  <td className="py-3 px-4">
+        <div className="grid gap-4">
+          {invoices.map((invoice) => (
+            <div key={invoice.id} className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-semibold text-white">
+                      {invoice.invoice_number}
+                    </h3>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[invoice.status]}`}>
+                      {statusLabels[invoice.status]}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-300">
                     <div>
-                      <div className="text-gray-100">{invoice.client_name}</div>
-                      <div className="text-sm text-gray-400">{invoice.client_email}</div>
+                      <span className="text-gray-400">Клиент:</span>
+                      <div className="font-medium">{invoice.client_name}</div>
+                      <div className="text-gray-400">{invoice.client_email}</div>
                     </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-gray-100 font-medium">
-                      {invoice.total.toFixed(2)} ₽
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(invoice.status)}`}>
-                      {getStatusIcon(invoice.status)}
-                      {getStatusText(invoice.status)}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-gray-300">
-                      {new Date(invoice.due_date).toLocaleDateString('ru-RU')}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleDownloadPDF(invoice)}
-                        disabled={actionLoading === invoice.id}
-                        className="p-2 text-gray-400 hover:text-gray-300 disabled:opacity-50"
-                        title="Скачать PDF"
-                      >
-                        {actionLoading === invoice.id ? (
-                          <Spinner size="sm" />
-                        ) : (
-                          <Download className="w-4 h-4" />
-                        )}
-                      </button>
-                      {invoice.status === 'draft' && (
-                        <button
-                          onClick={() => handleSendInvoice(invoice)}
-                          disabled={actionLoading === invoice.id}
-                          className="p-2 text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                          title="Отправить счет"
-                        >
-                          <Send className="w-4 h-4" />
-                        </button>
-                      )}
+                    <div>
+                      <span className="text-gray-400">Сумма:</span>
+                      <div className="font-medium text-lg text-white">₽{invoice.total.toFixed(2)}</div>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <div>
+                      <span className="text-gray-400">Срок оплаты:</span>
+                      <div className="font-medium">
+                        {new Date(invoice.due_date).toLocaleDateString('ru-RU')}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        Создан: {new Date(invoice.created_at).toLocaleDateString('ru-RU')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedInvoice(invoice)}
+                    className="flex items-center px-3 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 transition-colors"
+                  >
+                    <Eye className="w-4 h-4 mr-1" />
+                    Просмотр
+                  </button>
+                  <button
+                    onClick={() => downloadInvoicePDF(invoice)}
+                    className="flex items-center px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                  >
+                    <Download className="w-4 h-4 mr-1" />
+                    PDF
+                  </button>
+                  {invoice.status === 'sent' && (
+                    <button
+                      onClick={() => updateInvoiceStatus(invoice.id, 'paid')}
+                      className="flex items-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                    >
+                      Оплачен
+                    </button>
+                  )}
+                  <button
+                    onClick={() => deleteInvoice(invoice.id)}
+                    className="flex items-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    Удалить
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Модальное окно просмотра счета */}
+      {selectedInvoice && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold text-white">
+                  Счет {selectedInvoice.invoice_number}
+                </h3>
+                <button
+                  onClick={() => setSelectedInvoice(null)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-400">Дата создания:</span>
+                    <div className="text-white">{new Date(selectedInvoice.created_at).toLocaleDateString('ru-RU')}</div>
+                  </div>
+                  <div>
+                    <span className="text-gray-400">Срок оплаты:</span>
+                    <div className="text-white">{new Date(selectedInvoice.due_date).toLocaleDateString('ru-RU')}</div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-lg font-semibold text-white mb-2">Клиент</h4>
+                  <div className="bg-gray-700 p-4 rounded-lg text-sm">
+                    <div className="text-white font-medium">{selectedInvoice.client_name}</div>
+                    <div className="text-gray-300">{selectedInvoice.client_email}</div>
+                    {selectedInvoice.client_address && (
+                      <div className="text-gray-300">{selectedInvoice.client_address}</div>
+                    )}
+                    {selectedInvoice.client_phone && (
+                      <div className="text-gray-300">{selectedInvoice.client_phone}</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-lg font-semibold text-white mb-2">Позиции</h4>
+                  <div className="bg-gray-700 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-600">
+                        <tr>
+                          <th className="text-left p-3 text-gray-200">Описание</th>
+                          <th className="text-right p-3 text-gray-200">Кол-во</th>
+                          <th className="text-right p-3 text-gray-200">Цена</th>
+                          <th className="text-right p-3 text-gray-200">Сумма</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedInvoice.items.map((item, index) => (
+                          <tr key={index} className="border-t border-gray-600">
+                            <td className="p-3 text-white">{item.description}</td>
+                            <td className="p-3 text-right text-gray-300">{item.quantity}</td>
+                            <td className="p-3 text-right text-gray-300">₽{item.rate.toFixed(2)}</td>
+                            <td className="p-3 text-right text-white">₽{item.amount.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="bg-gray-700 p-4 rounded-lg">
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between text-gray-300">
+                      <span>Подытог:</span>
+                      <span>₽{selectedInvoice.subtotal.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-gray-300">
+                      <span>Налог:</span>
+                      <span>₽{selectedInvoice.tax.toFixed(2)}</span>
+                    </div>
+                    <div className="border-t border-gray-600 pt-2">
+                      <div className="flex justify-between text-white font-semibold text-lg">
+                        <span>Итого:</span>
+                        <span>₽{selectedInvoice.total.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {selectedInvoice.notes && (
+                  <div>
+                    <h4 className="text-lg font-semibold text-white mb-2">Примечания</h4>
+                    <div className="bg-gray-700 p-4 rounded-lg text-gray-300 text-sm">
+                      {selectedInvoice.notes}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-6 pt-6 border-t border-gray-700">
+                <button
+                  onClick={() => downloadInvoicePDF(selectedInvoice)}
+                  className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Скачать PDF
+                </button>
+                <button
+                  onClick={() => setSelectedInvoice(null)}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors"
+                >
+                  Закрыть
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

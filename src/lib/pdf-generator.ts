@@ -10,17 +10,52 @@ interface PdfSection {
 interface PdfOptions {
   title: string;
   subtitle?: string;
-  sections: PdfSection[];
+  sections?: PdfSection[];
   brandColor?: string;
   generatedBy?: string;
   footer?: string;
+  [key: string]: any;
 }
 
-export function generatePDF(options: PdfOptions, autoDownloadFilename?: string): jsPDF {
+export function generatePDF(options: PdfOptions, autoDownloadFilename?: string): any {
+  // Auto-build sections from arbitrary data if sections not provided
+  let resolvedSections: PdfSection[] = options.sections || [];
+  if (resolvedSections.length === 0) {
+    // Try to build sections from common data shapes
+    if (options.content && Array.isArray(options.content)) {
+      resolvedSections.push({
+        heading: 'Details',
+        items: options.content.map((c: any) =>
+          typeof c === 'string' ? c : (c.label ? c.label + ': ' + (c.value ?? '') : JSON.stringify(c))
+        ),
+      });
+    }
+    if (options.items && Array.isArray(options.items)) {
+      const rows = options.items.map((item: any) => [
+        String(item.description || item.name || ''),
+        String(item.quantity ?? item.qty ?? 1),
+        String(item.rate ?? item.price ?? ''),
+        String(item.amount ?? item.total ?? ''),
+      ]);
+      resolvedSections.push({
+        heading: 'Items',
+        table: { headers: ['Description', 'Qty', 'Rate', 'Amount'], rows, alignRight: [2, 3] },
+      });
+    }
+    // Fallback: dump all string values as sections
+    if (resolvedSections.length === 0) {
+      Object.entries(options).forEach(([key, val]) => {
+        if (key === 'title' || key === 'subtitle' || key === 'brandColor' || key === 'generatedBy' || key === 'footer') return;
+        if (typeof val === 'string' && val.length > 0) {
+          resolvedSections.push({ heading: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), content: val });
+        }
+      });
+    }
+  }
+
   const {
     title,
     subtitle,
-    sections,
     brandColor = '#5a67d8',
     generatedBy = 'Инструменты для автоматизации счетов',
     footer,
@@ -76,7 +111,7 @@ export function generatePDF(options: PdfOptions, autoDownloadFilename?: string):
   doc.setTextColor(33, 33, 33);
 
   // ─── Sections ───
-  for (const section of sections) {
+  for (const section of resolvedSections) {
     checkPage(25);
 
     if (section.heading) {
