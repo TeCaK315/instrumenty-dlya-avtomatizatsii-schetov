@@ -16,7 +16,7 @@
     "stripe": "^14.14.0",
     "jspdf": "^2.5.1",
     "openai": "4.24.7",
-    "next": "15.3.2",
+    "next": "15.3.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "lucide-react": "^0.468.0"
@@ -30,7 +30,7 @@
     "postcss": "^8.5.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.17.0",
-    "eslint-config-next": "15.3.2"
+    "eslint-config-next": "15.3.6"
   },
   "engines": {
     "node": ">=20.0.0"
