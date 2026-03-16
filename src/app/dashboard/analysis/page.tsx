@@ -149,6 +149,23 @@ function AnalysisContent() {
       const { generatePDF, downloadPDF } = await import('@/lib/pdf-generator');
       const sections: any[] = [];
 
+      // From/To info
+      const sender = result.sender || {};
+      const recipient = result.recipient || {};
+      if (sender.business_name || recipient.name) {
+        const contactLines: string[] = [];
+        if (sender.business_name) {
+          contactLines.push('From: ' + sender.business_name + (sender.email ? ' (' + sender.email + ')' : '') + (sender.address ? ', ' + sender.address : ''));
+        }
+        if (recipient.name) {
+          contactLines.push('To: ' + recipient.name + (recipient.email ? ' (' + recipient.email + ')' : '') + (recipient.address ? ', ' + recipient.address : ''));
+        }
+        if (result.doc_number) contactLines.push('Number: ' + result.doc_number);
+        if (result.date) contactLines.push('Date: ' + result.date);
+        if (result.due_date) contactLines.push('Due: ' + result.due_date);
+        sections.push({ heading: 'Details', items: contactLines });
+      }
+
       // Build sections from result
       if (result.executive_summary) {
         sections.push({ heading: 'Summary', content: result.executive_summary });
@@ -209,8 +226,10 @@ function AnalysisContent() {
       }
 
       const title = result.title || 'Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.';
-      const doc = generatePDF({ title, sections });
-      downloadPDF(doc, title.replace(/[^a-zA-Z0-9]/g, '_') + '.pdf');
+      const subtitle = result.doc_number ? result.doc_number + (recipient.name ? ' — ' + recipient.name : '') : undefined;
+      const doc = generatePDF({ title, subtitle, sections });
+      const filename = (result.doc_number || title).replace(/[^a-zA-Z0-9-]/g, '_') + '.pdf';
+      downloadPDF(doc, filename);
     } catch (err) {
       console.error('PDF export failed:', err);
     }
@@ -408,8 +427,9 @@ function AnalysisContent() {
    Document View — for invoices, quotes, line-item data
    ═══════════════════════════════════════════════════ */
 function DocumentView({ data, inputData }: { data: any; inputData: Record<string, any> }) {
+  const cur = data.currency || 'USD';
   const formatCurrency = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(n);
 
   const items = data.items || [];
   const subtotal = data.subtotal ?? items.reduce((s: number, i: any) => s + (i.quantity || 1) * (i.rate || 0), 0);
@@ -417,18 +437,32 @@ function DocumentView({ data, inputData }: { data: any; inputData: Record<string
   const taxAmount = data.tax_amount ?? subtotal * (taxRate / 100);
   const total = data.total ?? subtotal + taxAmount;
 
-  // Extract metadata fields (non-items, non-calculated)
-  const metaKeys = Object.keys(inputData).filter(k =>
-    !['items', 'subtotal', 'tax_rate', 'tax_amount', 'total', 'notes', 'input', 'q'].includes(k)
-  );
+  const sender = data.sender || {};
+  const recipient = data.recipient || {};
+  const docNumber = data.doc_number || '';
+  const docDate = data.date || '';
+  const dueDate = data.due_date || '';
+  const paymentTerms = data.payment_terms || '';
+
+  const formatDate = (d: string) => {
+    if (!d) return '';
+    try { return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }); }
+    catch { return d; }
+  };
+
+  const termsLabel = (t: string) => {
+    const map: Record<string, string> = { due_on_receipt: 'Due on Receipt', net_15: 'Net 15', net_30: 'Net 30', net_60: 'Net 60' };
+    return map[t] || t;
+  };
 
   return (
     <div className="divide-y" style={{ borderColor: '#5a67d808' }}>
-      {/* ─── Document Header ─── */}
+      {/* ─── Document Header with From / To ─── */}
       <div className="p-6 sm:p-8" style={{ background: '#ffffff08' }}>
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        {/* Top row: title + doc number */}
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div>
-            <h2 className="text-lg font-bold" style={{ fontFamily: 'Montserrat, sans-serif', color: '#edf2f7' }}>
+            <h2 className="text-xl font-bold" style={{ fontFamily: "'Montserrat', sans-serif", color: '#edf2f7' }}>
               {data.title || 'Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.'}
             </h2>
             {data.executive_summary && (
@@ -438,15 +472,35 @@ function DocumentView({ data, inputData }: { data: any; inputData: Record<string
             )}
           </div>
           <div className="text-sm space-y-1 sm:text-right" style={{ color: '#edf2f770' }}>
-            <p>{new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-            {metaKeys.slice(0, 4).map(key => (
-              <p key={key}>
-                <span style={{ color: '#edf2f750' }}>{key.replace(/_/g, ' ')}: </span>
-                {inputData[key]}
-              </p>
-            ))}
+            {docNumber && <p className="font-mono font-semibold" style={{ color: '#5a67d8' }}>{docNumber}</p>}
+            {docDate && <p>{formatDate(docDate)}</p>}
+            {dueDate && <p><span style={{ color: '#edf2f750' }}>Due: </span>{formatDate(dueDate)}</p>}
+            {paymentTerms && <p className="text-xs" style={{ color: '#edf2f750' }}>{termsLabel(paymentTerms)}</p>}
           </div>
         </div>
+
+        {/* From / To */}
+        {(sender.business_name || recipient.name) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4" style={{ borderTop: '1px solid #5a67d810' }}>
+            {sender.business_name && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: '#edf2f740' }}>From</p>
+                <p className="text-sm font-semibold" style={{ color: '#edf2f7' }}>{sender.business_name}</p>
+                {sender.email && <p className="text-xs mt-0.5" style={{ color: '#edf2f750' }}>{sender.email}</p>}
+                {sender.address && <p className="text-xs mt-0.5" style={{ color: '#edf2f750' }}>{sender.address}</p>}
+                {sender.phone && <p className="text-xs mt-0.5" style={{ color: '#edf2f750' }}>{sender.phone}</p>}
+              </div>
+            )}
+            {recipient.name && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: '#edf2f740' }}>To</p>
+                <p className="text-sm font-semibold" style={{ color: '#edf2f7' }}>{recipient.name}</p>
+                {recipient.email && <p className="text-xs mt-0.5" style={{ color: '#edf2f750' }}>{recipient.email}</p>}
+                {recipient.address && <p className="text-xs mt-0.5" style={{ color: '#edf2f750' }}>{recipient.address}</p>}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ─── Line Items Table ─── */}
