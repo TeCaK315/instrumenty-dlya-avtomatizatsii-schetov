@@ -46,6 +46,8 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 Create a `.env.local` file:
 
 ```env
+RESEND_API_KEY=re_xxxxxxxxxxxx  # Resend API key for sending emails (optional)
+EMAIL_FROM=noreply@yourdomain.com  # From email address (optional)
 NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co  # Supabase project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...  # Supabase anon key
 SUPABASE_SERVICE_ROLE_KEY=eyJ...  # Supabase service role key (server only)
@@ -86,7 +88,7 @@ To enable live AI analysis, add your OpenAI API key to `.env.local`.
 │   └── lib/              # Utilities & configurations
 ├── public/               # Static assets
 ├── .env.example          # Environment variables template
-└── package.json          # Dependencies (42 files total)
+└── package.json          # Dependencies (44 files total)
 ```
 
 ## Deployment

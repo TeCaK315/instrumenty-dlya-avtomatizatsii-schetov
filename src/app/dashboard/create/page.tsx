@@ -3,7 +3,31 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Plus, Trash2, Loader2, FileText, Download, Save, Building2, User } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, FileText, Download, Save, Building2, User, Edit3 } from 'lucide-react';
+
+const CURRENCIES = [
+  { code: 'USD', symbol: '$', label: 'USD ($)' },
+  { code: 'EUR', symbol: '\u20AC', label: 'EUR (\u20AC)' },
+  { code: 'GBP', symbol: '\u00A3', label: 'GBP (\u00A3)' },
+  { code: 'UAH', symbol: 'UAH', label: 'UAH' },
+  { code: 'RUB', symbol: 'RUB', label: 'RUB' },
+  { code: 'JPY', symbol: '\u00A5', label: 'JPY (\u00A5)' },
+  { code: 'CAD', symbol: 'C$', label: 'CAD (C$)' },
+  { code: 'AUD', symbol: 'A$', label: 'AUD (A$)' },
+  { code: 'CHF', symbol: 'CHF', label: 'CHF' },
+  { code: 'CNY', symbol: '\u00A5', label: 'CNY (\u00A5)' },
+  { code: 'INR', symbol: 'INR', label: 'INR' },
+  { code: 'BRL', symbol: 'R$', label: 'BRL (R$)' },
+];
+
+const PAYMENT_STATUSES = [
+  { value: 'draft', label: 'Draft', color: '#94a3b8' },
+  { value: 'sent', label: 'Sent', color: '#3b82f6' },
+  { value: 'unpaid', label: 'Unpaid', color: '#f59e0b' },
+  { value: 'paid', label: 'Paid', color: '#22c55e' },
+  { value: 'overdue', label: 'Overdue', color: '#ef4444' },
+  { value: 'cancelled', label: 'Cancelled', color: '#6b7280' },
+];
 
 interface LineItem {
   id: string;
@@ -67,8 +91,11 @@ export default function CreatePage() {
   const [taxRate, setTaxRate] = useState(0);
   const [notes, setNotes] = useState('');
   const [currency, setCurrency] = useState('USD');
+  const [paymentStatus, setPaymentStatus] = useState('draft');
+  const [editMode, setEditMode] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
 
-  // ─── Load saved profile + generate doc number ───
+  // ─── Load saved profile + generate doc number OR load for editing ───
   useEffect(() => {
     try {
       const saved = localStorage.getItem(PROFILE_KEY);
@@ -78,6 +105,36 @@ export default function CreatePage() {
         setSenderSaved(true);
       }
     } catch {}
+
+    // Check if editing an existing invoice
+    const params = new URLSearchParams(window.location.search);
+    const editParam = params.get('edit');
+    if (editParam) {
+      try {
+        const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+        const found = history.find((h: any) => h.id === editParam);
+        if (found && found.data) {
+          const d = found.data;
+          setEditMode(true);
+          setEditId(editParam);
+          setDocNumber(d.doc_number || '');
+          setDocDate(d.date || new Date().toISOString().split('T')[0]);
+          setDueDate(d.due_date || '');
+          setPaymentTerms(d.payment_terms || 'net_30');
+          setCurrency(d.currency || 'USD');
+          setPaymentStatus(d.payment_status || 'draft');
+          setNotes(d.notes || '');
+          setTaxRate(d.tax_rate || 0);
+          if (d.sender) setSender(d.sender);
+          if (d.recipient) setRecipient(d.recipient);
+          if (d.items && d.items.length > 0) {
+            setItems(d.items.map((item: any) => ({ ...item, id: item.id || crypto.randomUUID() })));
+          }
+          return; // Skip new doc number generation
+        }
+      } catch {}
+    }
+
     setDocNumber(getNextDocNumber());
 
     // Set default due date (30 days from now)
@@ -133,6 +190,7 @@ export default function CreatePage() {
       date: docDate,
       due_date: dueDate,
       payment_terms: paymentTerms,
+      payment_status: paymentStatus,
       currency,
       sender,
       recipient,
@@ -147,16 +205,27 @@ export default function CreatePage() {
     try {
       // Save to history
       const existing = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-      const historyItem = {
-        id: crypto.randomUUID(),
-        doc_number: docNumber,
-        input: recipient.name || 'Unnamed',
-        created_at: new Date().toISOString(),
-        status: 'completed',
-        data: payload,
-        result: payload, // For invoice, result IS the data
-      };
-      localStorage.setItem(HISTORY_KEY, JSON.stringify([historyItem, ...existing].slice(0, 50)));
+
+      if (editMode && editId) {
+        // Update existing entry
+        const updated = existing.map((h: any) =>
+          h.id === editId ? { ...h, data: payload, result: payload, input: recipient.name || 'Unnamed', payment_status: paymentStatus } : h
+        );
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+      } else {
+        // Create new entry
+        const historyItem = {
+          id: crypto.randomUUID(),
+          doc_number: docNumber,
+          input: recipient.name || 'Unnamed',
+          created_at: new Date().toISOString(),
+          status: 'completed',
+          payment_status: paymentStatus,
+          data: payload,
+          result: payload,
+        };
+        localStorage.setItem(HISTORY_KEY, JSON.stringify([historyItem, ...existing].slice(0, 50)));
+      }
 
       // Navigate to result/preview page
       const params = new URLSearchParams();
@@ -183,7 +252,7 @@ export default function CreatePage() {
         </Link>
         <div className="flex-1">
           <h1 className="text-xl font-bold" style={{ fontFamily: "'Montserrat', sans-serif", color: '#edf2f7' }}>
-            New Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.
+            {editMode ? <><Edit3 className="w-4 h-4 inline mr-2" />Edit Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.</> : 'New Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.'}
           </h1>
           <p className="text-xs mt-0.5" style={{ color: '#edf2f740' }}>
             {docNumber && <span className="font-mono">{docNumber}</span>}
@@ -341,6 +410,34 @@ export default function CreatePage() {
                   className={inputClasses}
                   style={inputStyle}
                 />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+              <div>
+                <label className={labelClasses} style={{ color: '#edf2f750' }}>Currency</label>
+                <select
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                  className={inputClasses}
+                  style={inputStyle}
+                >
+                  {CURRENCIES.map(c => (
+                    <option key={c.code} value={c.code}>{c.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className={labelClasses} style={{ color: '#edf2f750' }}>Status</label>
+                <select
+                  value={paymentStatus}
+                  onChange={(e) => setPaymentStatus(e.target.value)}
+                  className={inputClasses}
+                  style={inputStyle}
+                >
+                  {PAYMENT_STATUSES.map(s => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -507,9 +604,9 @@ export default function CreatePage() {
               style={{ background: 'linear-gradient(135deg, #5a67d8, #4a5568)', boxShadow: '0 0 24px #5a67d820' }}
             >
               {submitting ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> {editMode ? 'Saving...' : 'Generating...'}</>
               ) : (
-                <><FileText className="w-4 h-4" /> Generate Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.</>
+                <><FileText className="w-4 h-4" /> {editMode ? 'Save Changes' : 'Generate Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.'}</>
               )}
             </button>
 

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, Loader2, Download, RefreshCw, Clock, AlertCircle,
-  CheckCircle2, PlusCircle, FileText, Printer,
+  CheckCircle2, PlusCircle, FileText, Printer, Edit3, Mail, Send,
 } from 'lucide-react';
 
 /* ─── Types ─── */
@@ -26,12 +26,25 @@ export default function AnalysisPage() {
   );
 }
 
+const STATUS_COLORS: Record<string, string> = {
+  draft: '#94a3b8', sent: '#3b82f6', unpaid: '#f59e0b',
+  paid: '#22c55e', overdue: '#ef4444', cancelled: '#6b7280',
+};
+const STATUS_LABELS: Record<string, string> = {
+  draft: 'Draft', sent: 'Sent', unpaid: 'Unpaid',
+  paid: 'Paid', overdue: 'Overdue', cancelled: 'Cancelled',
+};
+
 function AnalysisContent() {
   const [result, setResult] = useState<AnalysisData | null>(null);
   const [inputData, setInputData] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingStep, setLoadingStep] = useState(0);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailTo, setEmailTo] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -238,6 +251,101 @@ function AnalysisContent() {
   /* ─── Print ─── */
   const handlePrint = useCallback(() => window.print(), []);
 
+  /* ─── Email ─── */
+  const handleSendEmail = useCallback(async () => {
+    if (!emailTo || !result) return;
+    setEmailSending(true);
+    try {
+      const { generatePDF } = await import('@/lib/pdf-generator');
+      const sections: any[] = [];
+      const sender = result.sender || {};
+      const recipient = result.recipient || {};
+      if (sender.business_name || recipient.name) {
+        const lines: string[] = [];
+        if (sender.business_name) lines.push('From: ' + sender.business_name);
+        if (recipient.name) lines.push('To: ' + recipient.name);
+        if (result.doc_number) lines.push('Number: ' + result.doc_number);
+        sections.push({ heading: 'Details', items: lines });
+      }
+      if (result.items && result.items.length > 0 && result.items[0]?.rate !== undefined) {
+        sections.push({
+          heading: 'Items',
+          table: {
+            headers: ['Description', 'Qty', 'Rate', 'Amount'],
+            rows: result.items.map((item: any) => [
+              item.description || '', String(item.quantity || 1),
+              '$' + (item.rate || 0).toFixed(2),
+              '$' + ((item.quantity || 1) * (item.rate || 0)).toFixed(2),
+            ]),
+            alignRight: [2, 3],
+          },
+        });
+      }
+      if (result.total !== undefined) {
+        sections.push({ heading: 'Totals', items: ['Total: $' + Number(result.total).toFixed(2)] });
+      }
+
+      const title = result.title || 'Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.';
+      const doc = generatePDF({ title, sections });
+      const pdfBase64 = doc.output('datauristring');
+
+      const res = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: emailTo,
+          subject: (result.doc_number || 'Автоматизированная система выставления счетов с интеграцией для фрилансеров и малых бизнесов.') + ' from ' + (result.sender?.business_name || 'Инструменты для автоматизации счетов'),
+          body: 'Please find the attached ' + (result.doc_number || 'document') + '.\n\nTotal: $' + (result.total || 0).toFixed(2) + '\n\nThank you!',
+          pdf_base64: pdfBase64,
+          filename: (result.doc_number || 'document') + '.pdf',
+        }),
+      });
+
+      const resData = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (resData.fallback) {
+          // No Resend key — open mailto link
+          window.open(resData.mailto, '_blank');
+          setShowEmailModal(false);
+        } else {
+          setEmailSent(true);
+          // Update status to 'sent' in history
+          try {
+            const historyKey = 'Инструменты для автоматизации счетов_history';
+            const history = JSON.parse(localStorage.getItem(historyKey) || '[]');
+            const updated = history.map((h: any) =>
+              h.doc_number === result.doc_number ? { ...h, payment_status: 'sent', data: { ...h.data, payment_status: 'sent' } } : h
+            );
+            localStorage.setItem(historyKey, JSON.stringify(updated));
+          } catch {}
+          setTimeout(() => { setShowEmailModal(false); setEmailSent(false); }, 2000);
+        }
+      } else {
+        alert('Failed to send: ' + (resData.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('Email send failed:', err);
+      alert('Failed to send email. Check console for details.');
+    } finally {
+      setEmailSending(false);
+    }
+  }, [emailTo, result]);
+
+  /* ─── Update payment status ─── */
+  const updateStatus = useCallback((newStatus: string) => {
+    if (!result) return;
+    const updated = { ...result, payment_status: newStatus };
+    setResult(updated);
+    try {
+      const historyKey = 'Инструменты для автоматизации счетов_history';
+      const history = JSON.parse(localStorage.getItem(historyKey) || '[]');
+      const updatedHistory = history.map((h: any) =>
+        h.doc_number === result.doc_number ? { ...h, payment_status: newStatus, data: { ...h.data, payment_status: newStatus }, result: { ...h.result, payment_status: newStatus } } : h
+      );
+      localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
+    } catch {}
+  }, [result]);
+
   /* ─── Loading State ─── */
   if (loading) {
     return (
@@ -365,6 +473,49 @@ function AnalysisContent() {
 
         {/* Actions */}
         <div className="flex items-center gap-2">
+          {/* Payment Status Badge */}
+          {result.payment_status && (
+            <select
+              value={result.payment_status}
+              onChange={(e) => updateStatus(e.target.value)}
+              className="px-3 py-1.5 rounded-full text-xs font-semibold border-0 cursor-pointer appearance-none text-center"
+              style={{
+                background: (STATUS_COLORS[result.payment_status] || '#94a3b8') + '20',
+                color: STATUS_COLORS[result.payment_status] || '#94a3b8',
+              }}
+            >
+              {Object.entries(STATUS_LABELS).map(([val, label]) => (
+                <option key={val} value={val}>{label}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => {
+              if (result.doc_number) {
+                const historyKey = 'Инструменты для автоматизации счетов_history';
+                const history = JSON.parse(localStorage.getItem(historyKey) || '[]');
+                const found = history.find((h: any) => h.doc_number === result.doc_number);
+                if (found) {
+                  router.push('/dashboard/create?edit=' + found.id);
+                  return;
+                }
+              }
+              router.push('/dashboard/create');
+            }}
+            className="p-2 rounded-lg border transition-colors hover:opacity-80 hidden sm:flex"
+            style={{ borderColor: '#5a67d820', color: '#edf2f770' }}
+            title="Edit"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => { setEmailTo(result.recipient?.email || ''); setShowEmailModal(true); }}
+            className="p-2 rounded-lg border transition-colors hover:opacity-80 hidden sm:flex"
+            style={{ borderColor: '#5a67d820', color: '#edf2f770' }}
+            title="Send Email"
+          >
+            <Mail className="w-4 h-4" />
+          </button>
           <button
             onClick={handlePrint}
             className="p-2 rounded-lg border transition-colors hover:opacity-80 hidden sm:flex"
@@ -406,10 +557,61 @@ function AnalysisContent() {
         )}
       </div>
 
+      {/* ─── Email Modal ─── */}
+      {showEmailModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 print:hidden" style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#ffffff12', boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.25)' }}>
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: '#edf2f7' }}>
+              <Mail className="w-5 h-5" style={{ color: '#5a67d8' }} />
+              Send via Email
+            </h3>
+            {emailSent ? (
+              <div className="text-center py-8">
+                <CheckCircle2 className="w-12 h-12 mx-auto mb-3" style={{ color: '#22c55e' }} />
+                <p className="text-sm font-medium" style={{ color: '#edf2f7' }}>Email sent successfully!</p>
+              </div>
+            ) : (
+              <>
+                <div className="mb-4">
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: '#edf2f750' }}>Recipient Email</label>
+                  <input
+                    type="email"
+                    value={emailTo}
+                    onChange={(e) => setEmailTo(e.target.value)}
+                    placeholder="client@example.com"
+                    className="w-full px-3 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 transition-all"
+                    style={{ background: '#1a202c', borderColor: '#5a67d815', color: '#edf2f7' }}
+                    autoFocus
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleSendEmail}
+                    disabled={emailSending || !emailTo}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg, #5a67d8, #4a5568)' }}
+                  >
+                    {emailSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                    {emailSending ? 'Sending...' : 'Send'}
+                  </button>
+                  <button
+                    onClick={() => setShowEmailModal(false)}
+                    className="px-4 py-2.5 rounded-xl text-sm font-medium border"
+                    style={{ borderColor: '#5a67d815', color: '#edf2f750' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ─── Footer ─── */}
       <div className="flex items-center justify-between pt-2 print:hidden">
         <Link
-          href="/dashboard"
+          href="/dashboard/history"
           className="text-sm flex items-center gap-1.5 hover:opacity-80 transition-opacity"
           style={{ color: '#edf2f750' }}
         >
@@ -443,6 +645,7 @@ function DocumentView({ data, inputData }: { data: any; inputData: Record<string
   const docDate = data.date || '';
   const dueDate = data.due_date || '';
   const paymentTerms = data.payment_terms || '';
+  const paymentStatus = data.payment_status || '';
 
   const formatDate = (d: string) => {
     if (!d) return '';
@@ -473,6 +676,17 @@ function DocumentView({ data, inputData }: { data: any; inputData: Record<string
           </div>
           <div className="text-sm space-y-1 sm:text-right" style={{ color: '#edf2f770' }}>
             {docNumber && <p className="font-mono font-semibold" style={{ color: '#5a67d8' }}>{docNumber}</p>}
+            {paymentStatus && (
+              <span
+                className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold"
+                style={{
+                  background: (STATUS_COLORS[paymentStatus] || '#94a3b8') + '20',
+                  color: STATUS_COLORS[paymentStatus] || '#94a3b8',
+                }}
+              >
+                {STATUS_LABELS[paymentStatus] || paymentStatus}
+              </span>
+            )}
             {docDate && <p>{formatDate(docDate)}</p>}
             {dueDate && <p><span style={{ color: '#edf2f750' }}>Due: </span>{formatDate(dueDate)}</p>}
             {paymentTerms && <p className="text-xs" style={{ color: '#edf2f750' }}>{termsLabel(paymentTerms)}</p>}
